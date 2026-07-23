@@ -1,6 +1,4 @@
-// Hermes Voice API — CF Pages Function
-import process from 'node:process';
-
+// Hermes Voice API
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -15,32 +13,41 @@ export async function onRequest(context) {
     return new Response('', { status: 204, headers: corsHeaders });
   }
 
-  // ── Forward voice input to Telegram ──
   if (url.pathname === '/api/hermes/voice' && request.method === 'POST') {
-    const formData = await request.formData();
-    const text = formData.get('text') || '';
-    const audioFile = formData.get('audio');
+    try {
+      const contentType = request.headers.get('content-type') || '';
+      let text = '';
+      if (contentType.includes('json')) {
+        const body = await request.json();
+        text = body.text || '';
+      } else {
+        const fd = await request.formData();
+        text = fd.get('text') || '';
+      }
 
-    // Mirror to Telegram
-    const TELEGRAM_TOKEN = env.TELEGRAM_BOT_TOKEN;
-    const CHAT_ID = env.TELEGRAM_CHAT_ID || '5470064076';
+      const TOKEN = env.TELEGRAM_BOT_TOKEN;
+      const CHAT = env.TELEGRAM_CHAT_ID || '5470064076';
 
-    if (TELEGRAM_TOKEN) {
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: CHAT_ID,
-          text: `🎤 Voice Input` + (text ? `: "${text}"` : ''),
-          parse_mode: 'MarkdownV2',
-        }),
-      }).catch(() => {});
+      if (TOKEN && text) {
+        fetch('https://api.telegram.org/bot' + TOKEN + '/sendMessage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: CHAT,
+            text: '\uD83C\uDFA4 Voice: ' + text,
+          }),
+        }).catch(function(){});
+      }
+
+      return new Response(JSON.stringify({ response: text || 'ok', audio_url: null }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    } catch (err) {
+      return new Response(JSON.stringify({ error: err.message }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
-
-    return new Response(JSON.stringify({
-      response: `Received` + (text ? `: "${text}"` : ''),
-      audio_url: null,
-    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   return new Response('Hermes Voice API', { status: 200, headers: corsHeaders });
