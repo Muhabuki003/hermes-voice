@@ -203,6 +203,9 @@
 // HERMES VOICE — Standalone Voice Client
 // ═══════════════════════════════════════
 
+// API endpoint — update this when Worker is deployed
+const API_BASE = '/api'; // Uses same origin or change to Worker URL
+
 const ORACLE = document.getElementById('oracle');
 const ICON = document.getElementById('oracle-icon');
 const STATE = document.getElementById('state-text');
@@ -362,17 +365,16 @@ function stopBrowserSTT() {
 async function processAudio(audioBlob) {
   const text = browserTranscript.trim() || '[audio recorded]';
   showTranscript(text, 'transcript');
-  showBubble('Hermes is thinking...', true);
+  showBubble('Sending to Hermes...', true);
+  setState('processing', 'sending...');
   
-  // Send to your Hermes endpoint
+  // Send to your Hermes via the API
   try {
     const formData = new FormData();
     formData.append('audio', audioBlob, 'recording.webm');
     formData.append('text', text);
     
-    // For now, send to Telegram via the bot API
-    // This will be replaced with a WebSocket connection
-    const response = await fetch('/api/hermes/voice', {
+    const response = await fetch(`${API_BASE}/hermes/voice`, {
       method: 'POST',
       body: formData
     });
@@ -380,21 +382,30 @@ async function processAudio(audioBlob) {
     if (response.ok) {
       const data = await response.json();
       hideBubble();
-      showBubble(data.response || 'Got it!');
+      
+      if (data.response) {
+        showBubble(data.response);
+      }
+      
       if (data.audio_url) {
-        playResponse(data.audio_url);
+        // Play TTS response
+        const audio = new Audio(data.audio_url);
+        setState('speaking');
+        audio.onended = () => setState('idle');
+        audio.onerror = () => setState('idle');
+        audio.play().catch(() => setState('idle'));
       } else {
         setState('idle');
       }
     } else {
-      throw new Error('Server error');
+      throw new Error(`HTTP ${response.status}`);
     }
   } catch (err) {
-    // Fallback: show what you said in Telegram
+    console.error('API call failed:', err);
     hideBubble();
+    showBubble('Connection issue — check console');
     setState('idle');
-    showTranscript('Sent to Telegram', 'response');
-    setTimeout(hideTranscript, 2000);
+    setTimeout(hideBubble, 3000);
   }
 }
 
