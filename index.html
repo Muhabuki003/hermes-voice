@@ -134,19 +134,31 @@ function setState(s) {
   else if (s === 'processing') { icon.textContent = '⟳'; LABEL.textContent = 'thinking...'; }
 }
 
-// ── Send text to Hermes ──
-async function sendToHermes(text) {
-  if (!text.trim()) return;
+// ── Send to Hermes ──
+async function sendToHermes(text, audioBlob) {
+  if (!text.trim() && !audioBlob) return;
   setState('processing');
-  addMsg(text, 'user');
+  if (text.trim()) addMsg(text, 'user');
+  else addMsg('[voice message]', 'user');
   INPUT.value = '';
   addTyping();
 
   try {
+    let body, headers = {};
+    if (audioBlob && !text.trim()) {
+      // Send audio as form data for server-side transcription
+      const fd = new FormData();
+      fd.append('audio', audioBlob, 'recording.webm');
+      body = fd;
+    } else {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify({ text: text || '[voice]' });
+    }
+    
     const r = await fetch(API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
+      headers,
+      body
     });
     const data = await r.json();
     removeTyping();
@@ -170,8 +182,12 @@ async function startRecording() {
     mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     mediaRecorder.onstop = async () => {
       stream.getTracks().forEach(t => t.stop());
-      const text = browserText.trim() || '[voice]';
-      await sendToHermes(text);
+      if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
+      // Wait for browser STT to finalize
+      await new Promise(r => setTimeout(r, 400));
+      const text = browserText.trim();
+      const blob = text ? null : new Blob(chunks, { type: 'audio/webm' });
+      await sendToHermes(text, blob);
     };
     mediaRecorder.start();
     isRecording = true;
