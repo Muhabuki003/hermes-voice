@@ -701,6 +701,7 @@
     const done = () => { clearInterval(keepAlive); setState('idle'); };
     u.onend = done;
     u.onerror = done;
+    synth.resume();  // needed after async fetch on Chrome/Safari
     synth.speak(u);
 
     // Chrome silently pauses long utterances; nudge it while we're speaking.
