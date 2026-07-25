@@ -688,11 +688,18 @@
         || null;
   }
 
-  function speak(text){
+  function speak(text, audioUrl){
+    if (audioUrl) {
+      setState('speaking');
+      const a = new Audio(audioUrl);
+      a.onended = () => setState('idle');
+      a.onerror = () => setState('idle');
+      a.play().catch(() => setState('idle'));
+      return;
+    }
     if (!synth){ setState('idle'); return; }
     synth.cancel();
     setState('speaking');
-
     const u = new SpeechSynthesisUtterance(text);
     const v = pickVoice();
     if (v) u.voice = v;
@@ -701,10 +708,8 @@
     const done = () => { clearInterval(keepAlive); setState('idle'); };
     u.onend = done;
     u.onerror = done;
-    synth.resume();  // needed after async fetch on Chrome/Safari
+    synth.resume();
     synth.speak(u);
-
-    // Chrome silently pauses long utterances; nudge it while we're speaking.
     clearInterval(keepAlive);
     keepAlive = setInterval(() => {
       if (!synth.speaking){ clearInterval(keepAlive); return; }
