@@ -743,8 +743,18 @@
     if (pendingUrl){ URL.revokeObjectURL(pendingUrl); pendingUrl = null; }
   }
 
-  async function speak(text){
+  // `audioUrl` is whatever the conversation backend already rendered for this
+  // reply. When present we play it straight from the URL and skip the TTS
+  // endpoint entirely — no second render, no CORS fetch.
+  async function speak(text, audioUrl){
     setState('speaking');
+
+    if (audioUrl){
+      const ok = await playSrc(audioUrl, text, false);
+      if (ok) return;
+      // The URL was unplayable — fall through and render it ourselves.
+    }
+
     try {
       const r = await fetch(SPEAK_API, {
         method: 'POST',
@@ -765,29 +775,41 @@
   }
 
   function playBlob(blob, text){
+    releasePending();
+    return playSrc(URL.createObjectURL(blob), text, true);
+  }
+
+  // Resolves true if the clip played (or is waiting on a tap), false if the
+  // source could not be played at all so the caller can try another route.
+  function playSrc(src, text, isObjectUrl){
     return new Promise((resolve) => {
-      releasePending();
-      const url = URL.createObjectURL(blob);
       let settled = false;
-      const finish = (revoke) => {
+      const finish = (ok, revoke) => {
         if (settled) return;
         settled = true;
-        if (revoke){ URL.revokeObjectURL(url); if (pendingUrl === url) pendingUrl = null; }
-        resolve();
+        if (revoke && isObjectUrl){
+          URL.revokeObjectURL(src);
+          if (pendingUrl === src) pendingUrl = null;
+        }
+        resolve(ok);
       };
 
-      player.onended = () => { finish(true); setState('idle'); };
-      player.onerror = () => { finish(true); speakWithBrowser(text, 'Audio decode failed'); };
+      player.onended = () => { finish(true, true); setState('idle'); };
+      player.onerror = () => {
+        // Let the caller decide what to do; only self-report if it was ours.
+        if (isObjectUrl){ finish(true, true); speakWithBrowser(text, 'Audio decode failed'); }
+        else finish(false, false);
+      };
 
       ensureAudioCtx();
-      player.src = url;
+      player.src = src;
       const p = player.play();
       if (p && p.catch){
         p.catch(() => {
           // Autoplay was refused — keep the clip and let a tap start it.
-          pendingUrl = url;
+          pendingUrl = src;
           hint.textContent = 'Tap to hear the reply';
-          finish(false);
+          finish(true, false);
         });
       }
     });
