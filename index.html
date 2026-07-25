@@ -427,10 +427,13 @@
     return audioCtx;
   }
 
+  let micStream = null;
+
   async function startMic(){
     if (micAnalyser) return true;
     try{
       const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+      micStream = stream;
       const ac = ensureAudioCtx();
       if (!ac) return false;
       const src = ac.createMediaStreamSource(stream);
@@ -441,6 +444,17 @@
       micData = new Uint8Array(micAnalyser.frequencyBinCount);
       return true;
     }catch(e){ return false; }
+  }
+
+  // Hold the mic only while listening — leaving it open keeps the recording
+  // indicator lit and can block the recogniser on the next turn.
+  function stopMic(){
+    if (micStream){
+      micStream.getTracks().forEach(t => { try { t.stop(); } catch(_){} });
+      micStream = null;
+    }
+    micAnalyser = null;
+    micData = null;
   }
 
   function micLevel(){
@@ -564,6 +578,7 @@
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognition = null;
   let finalText = '';
+  let interimText = '';             // fallback when the engine never finalises
   let wantListening = false;        // true between beginListening and finishListening
 
   function buildRecognition(){
@@ -573,13 +588,20 @@
     r.lang = navigator.language || 'en-US';
 
     r.onresult = (e) => {
-      let interim = '';
+      let interim = '', gotFinal = false;
       for (let i = e.resultIndex; i < e.results.length; i++){
         const chunk = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += chunk + ' ';
+        if (e.results[i].isFinal){ finalText += chunk + ' '; gotFinal = true; }
         else interim += chunk;
       }
+      // Stopping mid-phrase can drop the pending result, so hold on to the
+      // last interim text and use it if no final ever arrives.
+      if (gotFinal) interimText = '';
+      if (interim)  interimText = interim;
       showTurn(turnYou, (finalText + interim).trim());
+      // Only now open the mic for the meter: the recogniser is demonstrably
+      // running, so grabbing a second stream can no longer disturb its start.
+      if (!micAnalyser) startMic();
     };
 
     // Engines stop on their own after a pause; keep going until the user sends.
@@ -597,11 +619,13 @@
   async function beginListening(){
     if (!SR){ openComposer(); return; }
     finalText = '';
+    interimText = '';
     showTurn(turnYou, '');
     showTurn(turnHermes, '');
     wantListening = true;
     setState('listening');
-    startMic();                                   // drives the live meter
+    // Start the recogniser first — it is the part that matters. The mic meter
+    // is decoration and must never delay or disturb it.
     recognition = buildRecognition();
     try { recognition.start(); }
     catch(_){ /* already started */ }
@@ -619,11 +643,20 @@
     stopRecognition();
     // Give the engine a beat to flush its last final result.
     setTimeout(() => {
-      const text = finalText.trim();
+      const text = (finalText.trim() || interimText.trim());
       finalText = '';
+      interimText = '';
+      stopMic();
       if (text) send(text);
-      else { showTurn(turnYou, ''); setState('idle'); }
-    }, 350);
+      else missedSpeech();
+    }, 400);
+  }
+
+  // Never drop into idle without saying why — a silent reset reads as a crash.
+  function missedSpeech(){
+    showTurn(turnYou, '');
+    showTurn(turnHermes, 'I didn’t catch that — tap and speak again.', true);
+    setState('idle');
   }
 
   /* ── the round trip ─────────────────────────────────────────────── */
@@ -672,6 +705,8 @@
   }
 
   function fail(message){
+    stopRecognition();
+    stopMic();
     showTurn(turnHermes, message, true);
     setState('idle');
   }
@@ -850,11 +885,14 @@
   /* ------------------------------------------------------------------ */
   function handleTap(e){
     if (e) e.preventDefault();
-    unlockAudio();
     if (composer.classList.contains('on')) closeComposer();
 
+    // Deliberately no unlockAudio() on the idle -> listening tap: starting
+    // playback right before getUserMedia and recognition.start() takes audio
+    // focus away and stops the recogniser from hearing anything. The send tap
+    // is a gesture too, and it still lands well before playback is needed.
     if (state === 'idle')           beginListening();
-    else if (state === 'listening') finishListening();
+    else if (state === 'listening') { unlockAudio(); finishListening(); }
     else if (state === 'thinking')  cancelRequest();
     else if (retryPending())        return;   // playback was blocked; start it
     else                            stopSpeaking();
