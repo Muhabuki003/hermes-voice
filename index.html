@@ -1,247 +1,796 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Hermes Voice</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Hex Voice</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
-  :root {
-    --bg: #080808;
-    --surface: #111;
-    --surface2: #181818;
-    --border: #1e1e1e;
-    --text: #E4D9CC;
-    --muted: #666;
-    --accent: #D63929;
-    --accent-glow: rgba(214,57,41,0.3);
+  :root{
+    --void:#020505;
+    --ink:#5c7a7c;
+    --ink-bright:#d7f3ef;
   }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; overflow: hidden; }
-
-  /* ── LAYOUT ── */
-  #chat-panel {
-    position: fixed; top: 0; left: 0; right: 0; bottom: 100px;
-    overflow-y: auto; padding: 20px;
-    display: flex; flex-direction: column; gap: 12px;
-    scroll-behavior: smooth;
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--void)}
+  body{
+    font-family:"JetBrains Mono","IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    -webkit-user-select:none;user-select:none;
+    -webkit-tap-highlight-color:transparent;
   }
-  #chat-panel::-webkit-scrollbar { width: 4px; }
-  #chat-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; line-height: 1.5; animation: fadeIn 0.3s ease; }
-  .msg.user { background: rgba(214,57,41,0.12); border: 1px solid rgba(214,57,41,0.2); align-self: flex-end; }
-  .msg.hermes { background: var(--surface2); border: 1px solid var(--border); align-self: flex-start; }
-  .msg .time { font-size: 0.6rem; color: var(--muted); margin-top: 4px; text-align: right; }
-  .msg.typing { color: var(--muted); font-style: italic; }
-
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-
-  /* ── SPHERE ── */
-  #oracle {
-    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-    width: 72px; height: 72px;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 35%, #D63929, #8a1f14 60%, #1a0503);
-    box-shadow: 0 0 30px var(--accent-glow), inset 0 -4px 12px rgba(0,0,0,0.5);
-    cursor: pointer; z-index: 99999;
-    display: flex; align-items: center; justify-content: center;
-    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s;
-  }
-  #oracle:hover { transform: translateX(-50%) scale(1.1); }
-  #oracle.listening { box-shadow: 0 0 50px var(--accent-glow), 0 0 100px rgba(214,57,41,0.3); animation: pulse 1.5s infinite; }
-  #oracle.processing { box-shadow: 0 0 60px rgba(255,200,50,0.3); animation: pulse-fast 0.6s infinite; }
-  #oracle .icon { font-size: 26px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); }
-
-  @keyframes pulse { 0%,100%{transform:translateX(-50%) scale(1)} 50%{transform:translateX(-50%) scale(1.08)} }
-  @keyframes pulse-fast { 0%,100%{transform:translateX(-50%) scale(1)} 50%{transform:translateX(-50%) scale(1.12)} }
-
-  #status-label {
-    position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
-    font-size: 0.6rem; letter-spacing: 0.15em; text-transform: uppercase;
-    color: var(--muted); text-align: center; font-family: 'Syne', sans-serif;
-    pointer-events: none;
+  canvas{
+    position:fixed;
+    inset:0;
+    width:100vw;
+    height:100vh;
+    display:block;
+    cursor:pointer;
   }
 
-  /* ── INPUT BAR ── */
-  #input-bar {
-    position: fixed; bottom: 0; left: 0; right: 0;
-    padding: 10px 16px 20px;
-    display: flex; gap: 8px; align-items: center;
-    background: linear-gradient(transparent, var(--bg) 40%);
+  .hud{
+    position:fixed;
+    inset:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:space-between;
+    padding:clamp(20px,5vh,52px) 24px;
+    pointer-events:none;
+    z-index:2;
   }
-  #text-input {
-    flex: 1; background: var(--surface2); border: 1px solid var(--border);
-    color: var(--text); font-family: 'DM Sans', sans-serif;
-    font-size: 0.85rem; padding: 10px 14px; border-radius: 24px;
-    outline: none;
+
+  .eyebrow{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-size:11px;
+    letter-spacing:.34em;
+    text-transform:uppercase;
+    color:var(--ink);
+    opacity:.85;
   }
-  #text-input:focus { border-color: var(--accent); }
-  #send-btn {
-    width: 40px; height: 40px; border-radius: 50%;
-    background: var(--accent); border: none; color: white;
-    font-size: 1rem; cursor: pointer; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
+  .eyebrow .dot{
+    width:5px;height:5px;border-radius:50%;
+    background:#2ee6d0;
+    box-shadow:0 0 10px #2ee6d0;
+    transition:background .5s, box-shadow .5s;
+  }
+  body[data-state="listening"] .eyebrow .dot{background:#ffb03a;box-shadow:0 0 12px #ffb03a}
+  body[data-state="thinking"]  .eyebrow .dot{background:#7c5cff;box-shadow:0 0 12px #7c5cff}
+  body[data-state="speaking"]  .eyebrow .dot{background:#b06cff;box-shadow:0 0 14px #b06cff}
+
+  /* ── transcript — sits above the readout so it never overlaps the core ── */
+  .transcript{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:8px;
+    max-width:min(620px,86vw);
+    text-align:center;
+    margin-bottom:clamp(14px,4vh,32px);
+  }
+  .turn{
+    font-size:13px;
+    line-height:1.65;
+    letter-spacing:.02em;
+    opacity:0;
+    transform:translateY(6px);
+    transition:opacity .4s ease, transform .4s ease;
+  }
+  .turn.show{opacity:1;transform:translateY(0)}
+  .turn.you{color:rgba(215,243,239,.42);font-size:12px;letter-spacing:.06em}
+  .turn.hermes{color:var(--ink-bright)}
+  .turn.error{color:#ff6b5a}
+
+  .bottom{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:14px;
+  }
+  .label{
+    font-size:12px;
+    letter-spacing:.3em;
+    text-transform:uppercase;
+    color:var(--ink-bright);
+    opacity:0;
+    transform:translateY(4px);
+    transition:opacity .35s ease, transform .35s ease;
+  }
+  .label.show{opacity:1;transform:translateY(0)}
+
+  .meter{display:flex;gap:3px;align-items:flex-end;height:16px}
+  .meter i{
+    display:block;width:3px;height:3px;
+    background:rgba(92,122,124,.32);
+    transition:height .07s linear, background .07s linear;
+  }
+
+  .hint{
+    font-size:10.5px;
+    letter-spacing:.24em;
+    text-transform:uppercase;
+    color:rgba(92,122,124,.6);
+    pointer-events:auto;
+    cursor:pointer;
+  }
+
+  /* ── typed fallback ── */
+  .composer{
+    display:none;
+    pointer-events:auto;
+    width:min(460px,84vw);
+  }
+  .composer.on{display:block}
+  .composer input{
+    width:100%;
+    background:rgba(215,243,239,.04);
+    border:1px solid rgba(92,122,124,.35);
+    border-radius:2px;
+    color:var(--ink-bright);
+    font-family:inherit;
+    font-size:13px;
+    letter-spacing:.04em;
+    padding:11px 14px;
+    outline:none;
+    -webkit-user-select:text;user-select:text;
+  }
+  .composer input:focus{border-color:rgba(46,230,208,.6)}
+  .composer input::placeholder{color:rgba(92,122,124,.55)}
+
+  @media (prefers-reduced-motion:reduce){
+    .label,.turn{transition:none}
   }
 </style>
 </head>
-<body>
+<body data-state="idle">
 
-<div id="chat-panel"></div>
-<div id="status-label">tap the sphere or type below</div>
-<div id="oracle" class="idle"><span class="icon">✦</span></div>
-<div id="input-bar">
-  <input id="text-input" type="text" placeholder="Type a message..." autocomplete="off">
-  <button id="send-btn">➤</button>
-</div>
+  <canvas id="c"></canvas>
+
+  <div class="hud">
+    <div class="eyebrow"><span class="dot"></span><span>Hermes · Voice</span></div>
+
+    <div class="bottom">
+      <div class="transcript">
+        <p class="turn you" id="turn-you"></p>
+        <p class="turn hermes" id="turn-hermes"></p>
+      </div>
+      <span class="label" id="label">Idle</span>
+      <span class="meter" id="meter"></span>
+      <form class="composer" id="composer" autocomplete="off">
+        <input id="composer-input" type="text" placeholder="Type to Hermes…" enterkeyhint="send">
+      </form>
+      <p class="hint" id="hint">Tap anywhere to speak</p>
+    </div>
+  </div>
 
 <script>
-const API = 'https://hermes-voice-86h.pages.dev/api/hermes/voice';
-const CHAT = document.getElementById('chat-panel');
-const ORACLE = document.getElementById('oracle');
-const LABEL = document.getElementById('status-label');
-const INPUT = document.getElementById('text-input');
-const SEND = document.getElementById('send-btn');
+(() => {
+  'use strict';
 
-// ── Chat ──
-function addMsg(text, who) {
-  const div = document.createElement('div');
-  div.className = `msg ${who}`;
-  div.innerHTML = text.replace(/\n/g, '<br>') + `<div class="time">${new Date().toLocaleTimeString()}</div>`;
-  CHAT.appendChild(div);
-  CHAT.scrollTop = CHAT.scrollHeight;
-}
+  const canvas = document.getElementById('c');
+  const ctx    = canvas.getContext('2d');
+  const label  = document.getElementById('label');
+  const hint   = document.getElementById('hint');
+  const meter  = document.getElementById('meter');
+  const turnYou    = document.getElementById('turn-you');
+  const turnHermes = document.getElementById('turn-hermes');
+  const composer      = document.getElementById('composer');
+  const composerInput = document.getElementById('composer-input');
 
-function addTyping() {
-  const div = document.createElement('div');
-  div.className = 'msg hermes typing';
-  div.id = 'typing-msg';
-  div.textContent = 'thinking...';
-  CHAT.appendChild(div);
-  CHAT.scrollTop = CHAT.scrollHeight;
-}
+  const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const TAU = Math.PI * 2;
+  const STEP_RAD = TAU / 6;               // the hex lattice: 60° turns only
 
-function removeTyping() {
-  const t = document.getElementById('typing-msg');
-  if (t) t.remove();
-}
+  let W = 0, H = 0, CX = 0, CY = 0, DPR = 1, UNIT = 1;
 
-function setState(s) {
-  ORACLE.className = s;
-  const icon = ORACLE.querySelector('.icon');
-  if (s === 'idle') { icon.textContent = '✦'; LABEL.textContent = 'tap the sphere or type'; }
-  else if (s === 'listening') { icon.textContent = '◉'; LABEL.textContent = 'listening...'; }
-  else if (s === 'processing') { icon.textContent = '⟳'; LABEL.textContent = 'thinking...'; }
-}
-
-// ── Send to Hermes ──
-async function sendToHermes(text, audioBlob) {
-  if (!text.trim() && !audioBlob) return;
-  setState('processing');
-  if (text.trim()) addMsg(text, 'user');
-  else addMsg('[voice message]', 'user');
-  INPUT.value = '';
-  addTyping();
-
-  try {
-    let body, headers = {};
-    if (audioBlob && !text.trim()) {
-      // Send audio as form data for server-side transcription
-      const fd = new FormData();
-      fd.append('audio', audioBlob, 'recording.webm');
-      body = fd;
-    } else {
-      headers['Content-Type'] = 'application/json';
-      body = JSON.stringify({ text: text || '[voice]' });
-    }
-    
-    const r = await fetch(API, {
-      method: 'POST',
-      headers,
-      body
-    });
-    const data = await r.json();
-    removeTyping();
-    addMsg(data.response || '...', 'hermes');
-  } catch (e) {
-    removeTyping();
-    addMsg('Connection error: ' + e.message, 'hermes');
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width  = W * DPR;
+    canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    CX = W / 2;
+    CY = H / 2;
+    UNIT = Math.max(W, H) / 46;           // lattice spacing scales to viewport
+    ctx.fillStyle = '#020505';
+    ctx.fillRect(0, 0, W, H);
   }
-  setState('idle');
-}
 
-// ── Voice Recording ──
-let mediaRecorder = null, chunks = [], isRecording = false;
-let recognition = null, browserText = '';
-
-async function startRecording() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    chunks = [];
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-    mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-    mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop());
-      if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
-      // Wait for browser STT to finalize
-      await new Promise(r => setTimeout(r, 400));
-      const text = browserText.trim();
-      const blob = text ? null : new Blob(chunks, { type: 'audio/webm' });
-      await sendToHermes(text, blob);
-    };
-    mediaRecorder.start();
-    isRecording = true;
-    setState('listening');
-
-    // Browser STT
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SR) {
-      browserText = '';
-      recognition = new SR();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      recognition.onresult = e => {
-        let final = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          if (e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
-        }
-        if (final) browserText += final;
-      };
-      recognition.start();
+  /* ------------------------------------------------------------------ */
+  /*  State presets — behaviors of the same lattice walk                 */
+  /* ------------------------------------------------------------------ */
+  const PRESETS = {
+    idle: {
+      hue:172, hueSpread:24, count:REDUCED?26:56,
+      step:16, flow:0, reach:15, glow:.5, fade:.05, blur:7, spark:.04, light:52
+    },
+    listening: {
+      hue:38, hueSpread:14, count:REDUCED?34:84,
+      step:8,  flow:-1, reach:24, glow:.85, fade:.075, blur:11, spark:.1, light:58
+    },
+    thinking: {
+      hue:266, hueSpread:26, count:REDUCED?32:76,
+      step:6,  flow:-1, reach:19, glow:.78, fade:.085, blur:9, spark:.07, light:56
+    },
+    speaking: {
+      hue:186, hueSpread:44, count:REDUCED?36:96,
+      step:7,  flow:1,  reach:26, glow:1,  fade:.058, blur:13, spark:.13, light:60
     }
-  } catch (e) {
-    alert('Mic access needed: ' + e.message);
+  };
+
+  const P = Object.assign({}, PRESETS.idle);
+
+  let state = 'idle', level = 0, tick = 0, breathe = 0;
+
+  function lerp(a,b,t){ return a + (b - a) * t; }
+
+  /* ------------------------------------------------------------------ */
+  /*  Particle — one node on the hex lattice, walking outward or inward  */
+  /* ------------------------------------------------------------------ */
+  function Line(){ this.reset(true); }
+
+  Line.prototype.reset = function(scatter){
+    if (P.flow < 0){
+      // inward flow: spawn scattered across the whole field, on the rim side
+      const a = Math.random() * TAU;
+      const r = P.reach * (scatter ? .3 + Math.random() * .7 : 1);
+      this.x = Math.cos(a) * r;
+      this.y = Math.sin(a) * r;
+    } else {
+      // outward / neutral flow: spawn near center, scattered a little
+      const a = Math.random() * TAU;
+      const j = scatter ? Math.random() * (P.flow === 0 ? P.reach * .8 : 3) : 0;
+      this.x = Math.cos(a) * j;
+      this.y = Math.sin(a) * j;
+    }
+    this.ax = 0; this.ay = 0;
+    this.rad = Math.floor(Math.random() * 6) * STEP_RAD;
+    this.lightRate  = .012 + .022 * Math.random();
+    this.hueOffset  = (Math.random() - .5) * 2;
+    this.age = 0;
+    this.beginPhase();
+  };
+
+  Line.prototype.beginPhase = function(){
+    this.x += this.ax;
+    this.y += this.ay;
+    this.t = 0;
+    this.target = Math.max(3, (P.step + P.step * .8 * Math.random()) | 0);
+
+    const rA = this.rad + STEP_RAD;
+    const rB = this.rad - STEP_RAD;
+    const dA = Math.hypot(this.x + Math.cos(rA), this.y + Math.sin(rA));
+    const dB = Math.hypot(this.x + Math.cos(rB), this.y + Math.sin(rB));
+    const outward = dA > dB ? rA : rB;
+    const inward  = dA > dB ? rB : rA;
+    const bias = .5 + .45 * P.flow;                  // -1..1 -> .05..0.95
+    this.rad = Math.random() < bias ? outward : inward;
+
+    this.ax = Math.cos(this.rad);
+    this.ay = Math.sin(this.rad);
+
+    const dist = Math.hypot(this.x, this.y);
+    const dead = dist > P.reach || (P.flow < 0 && dist < .8) || Math.random() < .03;
+    if (dead) this.reset(false);
+  };
+
+  Line.prototype.step = function(){
+    this.t++; this.age++;
+    if (this.t >= this.target) this.beginPhase();
+
+    const prop = this.t / this.target;
+    const wave = Math.sin(prop * Math.PI / 2);
+    const px = CX + (this.x + this.ax * wave) * UNIT;
+    const py = CY + (this.y + this.ay * wave) * UNIT;
+
+    const hue = P.hue + this.hueOffset * P.hueSpread;
+    const li  = P.light + 12 * Math.sin(this.age * this.lightRate);
+    const col = 'hsla(' + hue.toFixed(0) + ',100%,' + li.toFixed(0) + '%,' + P.glow.toFixed(3) + ')';
+
+    ctx.shadowBlur  = prop * P.blur;
+    ctx.shadowColor = col;
+    ctx.fillStyle   = col;
+    ctx.fillRect(px, py, 2, 2);
+
+    if (Math.random() < P.spark){
+      const d = 10;
+      ctx.fillRect(
+        px + (Math.random() - .5) * d * 2,
+        py + (Math.random() - .5) * d * 2,
+        2, 2
+      );
+    }
+  };
+
+  const lines = [];
+
+  /* ------------------------------------------------------------------ */
+  /*  Hexagon shockwave rings — the "speaking" signature, full-screen    */
+  /* ------------------------------------------------------------------ */
+  const rings = [];
+  let lastPeak = 0;
+
+  function emitRing(strength){
+    rings.push({ r: UNIT * 2, a: .5 * strength, rot: Math.random() * STEP_RAD, v: 2.2 + strength * 5.2 });
+    if (rings.length > 10) rings.shift();
+  }
+
+  function hexPath(cx, cy, r, rot){
+    ctx.beginPath();
+    for (let k = 0; k < 6; k++){
+      const a = rot + k * STEP_RAD;
+      const x = cx + Math.cos(a) * r;
+      const y = cy + Math.sin(a) * r;
+      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+  }
+
+  function drawRings(){
+    const max = Math.hypot(W, H) * .58;      // travel well past the corners
+    for (let i = rings.length - 1; i >= 0; i--){
+      const g = rings[i];
+      g.r += g.v;
+      g.a *= .965;
+      if (g.a < .01 || g.r > max){ rings.splice(i, 1); continue; }
+
+      hexPath(CX, CY, g.r, g.rot);
+      const col = 'hsla(' + P.hue.toFixed(0) + ',100%,66%,' + g.a.toFixed(3) + ')';
+      ctx.strokeStyle = col;
+      ctx.shadowColor  = col;
+      ctx.shadowBlur   = 18;
+      ctx.lineWidth    = 1.2;
+      ctx.stroke();
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Core glow — the still center for every state but speaking          */
+  /* ------------------------------------------------------------------ */
+  function drawCore(){
+    const h = P.hue.toFixed(0);
+
+    if (state === 'speaking'){
+      // Core hexagon intentionally removed — speaking is carried by the
+      // lattice particles and shockwave rings only.
+      return;
+    } else {
+      const base = UNIT * (state === 'idle' ? 1.3 : state === 'thinking' ? .85 : 1.8);
+      const r = base * (1 + level * 1.7) * (1 + .18 * Math.sin(breathe));
+      const g = ctx.createRadialGradient(CX, CY, 0, CX, CY, r * 3.2);
+      g.addColorStop(0,   'hsla(' + h + ',100%,82%,' + (.45 + level * .4).toFixed(3) + ')');
+      g.addColorStop(.35, 'hsla(' + h + ',100%,60%,' + (.14 + level * .26).toFixed(3) + ')');
+      g.addColorStop(1,   'hsla(' + h + ',100%,50%,0)');
+      ctx.fillStyle = g;
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.arc(CX, CY, r * 3.2, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Param easing per state                                            */
+  /* ------------------------------------------------------------------ */
+  function updateParams(){
+    const target = PRESETS[state];
+    const k = .06;
+
+    let flow = target.flow, reach = target.reach, glow = target.glow;
+
+    if (state === 'idle'){
+      breathe += REDUCED ? .006 : .012;
+      const b = Math.sin(breathe);
+      flow  = .5 * b;                          // gentle out / in cycle
+      reach = target.reach * (1 + .3 * b);      // expands and contracts
+      glow  = target.glow  * (.55 + .45 * (b * .5 + .5));  // fades with it
+    } else {
+      breathe += .02;
+      if (state === 'thinking'){
+        // tight, fast inward spiral that pulses while we wait on the model
+        reach = target.reach * (1 + .22 * Math.sin(breathe * 1.6));
+        glow  = target.glow  * (.6 + .4 * (Math.sin(breathe * 2.2) * .5 + .5));
+      } else if (state === 'speaking'){
+        reach = target.reach * (.75 + level * .5);
+        glow  = target.glow  * (.55 + level * .45);
+      }
+    }
+
+    for (const key in target){
+      if (['flow','reach','glow','count'].includes(key)) continue;
+      P[key] = lerp(P[key], target[key], k);
+    }
+    P.flow  = lerp(P.flow,  flow,  k);
+    P.reach = lerp(P.reach, reach, k);
+    P.glow  = lerp(P.glow,  glow,  k);
+    P.count = target.count;
+
+    if (state === 'speaking'){
+      P.hue  = lerp(P.hue, 172 + level * 128, .1);
+      P.step = lerp(P.step, 9 - level * 4, .1);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Audio                                                              */
+  /* ------------------------------------------------------------------ */
+  let analyser = null, micData = null, audioCtx = null;
+  let simT = 0, externalLevel = null;
+
+  async function startMic(){
+    if (analyser) return true;
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = .72;
+      src.connect(analyser);
+      micData = new Uint8Array(analyser.frequencyBinCount);
+      return true;
+    }catch(e){ return false; }
+  }
+
+  function micLevel(){
+    analyser.getByteFrequencyData(micData);
+    let sum = 0;
+    for (let i = 0; i < micData.length; i++) sum += micData[i] * micData[i];
+    return Math.min(1, Math.sqrt(sum / micData.length) / 255 * 3.2);
+  }
+
+  function simSpeech(){
+    simT += .016;
+    const syl    = Math.pow(Math.max(0, Math.sin(simT * TAU * 5.2)), 1.5);
+    const phrase = Math.max(0, Math.sin(simT * .72) * .5 + .55);
+    const jitter = .82 + .18 * Math.sin(simT * 31.7);
+    return Math.min(1, syl * phrase * jitter * 1.25);
+  }
+
+  function simBreath(){
+    simT += .016;
+    return .12 + .1 * Math.sin(simT * 2.1);
+  }
+
+  function simThink(){
+    simT += .016;
+    return .16 + .11 * Math.sin(simT * 3.4) * Math.sin(simT * 1.1);
+  }
+
+  function pollLevel(){
+    let v;
+    if (externalLevel !== null)     v = externalLevel;
+    else if (state === 'listening') v = analyser ? micLevel() : simBreath();
+    else if (state === 'thinking')  v = simThink();
+    else if (state === 'speaking')  v = simSpeech();
+    else                             v = .05 + .04 * Math.sin(tick * .03);
+    level += (v - level) * .28;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Readout                                                            */
+  /* ------------------------------------------------------------------ */
+  const BARS = 22;
+  for (let i = 0; i < BARS; i++) meter.appendChild(document.createElement('i'));
+  const bars = meter.querySelectorAll('i');
+
+  function paintMeter(){
+    const lit = Math.round(level * BARS);
+    const hue = P.hue.toFixed(0);
+    for (let i = 0; i < BARS; i++){
+      const on = i < lit;
+      const b = bars[i];
+      b.style.height = on ? (3 + (i / BARS) * 13).toFixed(1) + 'px' : '3px';
+      b.style.background = on
+        ? 'hsl(' + hue + ',100%,' + (58 + i).toFixed(0) + '%)'
+        : 'rgba(92,122,124,.3)';
+    }
+  }
+
+  const COPY = {
+    idle:      ['Idle',      'Tap anywhere to speak'],
+    listening: ['Listening', 'Tap again to send'],
+    thinking:  ['Thinking',  'Tap to cancel'],
+    speaking:  ['Speaking',  'Tap to interrupt']
+  };
+
+  function setState(next){
+    if (next === state) return;
+    state = next;
+    document.body.dataset.state = next;
+    label.textContent = COPY[next][0];
+    label.classList.add('show');
+    hint.textContent = COPY[next][1];
+    if (next === 'speaking' || next === 'thinking') simT = 0;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Loop                                                               */
+  /* ------------------------------------------------------------------ */
+  function loop(){
+    requestAnimationFrame(loop);
+    tick++;
+    updateParams();
+    pollLevel();
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(2,5,5,' + P.fade.toFixed(3) + ')';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+
+    drawCore();
+
+    while (lines.length < P.count) lines.push(new Line());
+    while (lines.length > P.count) lines.pop();
+    for (let i = 0; i < lines.length; i++) lines[i].step();
+
+    if (state === 'speaking' && !REDUCED && level > .55 && tick - lastPeak > 7){
+      emitRing(level);
+      lastPeak = tick;
+    }
+    drawRings();
+
+    ctx.shadowBlur = 0;
+    paintMeter();
+  }
+
+  /* ================================================================== */
+  /*  HERMES — speech in, Claude in the middle, speech out               */
+  /* ================================================================== */
+
+  const API = '/api/hermes/voice';
+  const HISTORY_LIMIT = 20;         // turns kept client-side and replayed
+  const history = [];
+
+  function showTurn(el, text, isError){
+    el.textContent = text || '';
+    el.classList.toggle('error', !!isError);
+    el.classList.toggle('show', !!text);
+  }
+
+  /* ── speech recognition ─────────────────────────────────────────── */
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
+  let finalText = '';
+  let wantListening = false;        // true between beginListening and finishListening
+
+  function buildRecognition(){
+    const r = new SR();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = navigator.language || 'en-US';
+
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++){
+        const chunk = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += chunk + ' ';
+        else interim += chunk;
+      }
+      showTurn(turnYou, (finalText + interim).trim());
+    };
+
+    // Engines stop on their own after a pause; keep going until the user sends.
+    r.onend = () => { if (wantListening) { try { r.start(); } catch(_){} } };
+    r.onerror = (e) => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
+      wantListening = false;
+      fail(e.error === 'not-allowed'
+        ? 'Microphone permission denied.'
+        : 'Speech recognition error: ' + e.error);
+    };
+    return r;
+  }
+
+  async function beginListening(){
+    if (!SR){ openComposer(); return; }
+    finalText = '';
+    showTurn(turnYou, '');
+    showTurn(turnHermes, '');
+    wantListening = true;
+    setState('listening');
+    startMic();                                   // drives the live meter
+    recognition = buildRecognition();
+    try { recognition.start(); }
+    catch(_){ /* already started */ }
+  }
+
+  function stopRecognition(){
+    wantListening = false;
+    if (recognition){
+      try { recognition.stop(); } catch(_){}
+      recognition = null;
+    }
+  }
+
+  function finishListening(){
+    stopRecognition();
+    // Give the engine a beat to flush its last final result.
+    setTimeout(() => {
+      const text = finalText.trim();
+      finalText = '';
+      if (text) send(text);
+      else { showTurn(turnYou, ''); setState('idle'); }
+    }, 350);
+  }
+
+  /* ── the round trip ─────────────────────────────────────────────── */
+  let inflight = null;
+
+  async function send(text){
+    clearInterval(keepAlive);
+    if (synth) synth.cancel();          // a new question interrupts the old answer
+    showTurn(turnYou, text);
+    showTurn(turnHermes, '');
+    setState('thinking');
+
+    inflight = new AbortController();
+    try {
+      const r = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, history: history.slice(-HISTORY_LIMIT) }),
+        signal: inflight.signal
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || ('Request failed (' + r.status + ')'));
+
+      const reply = data.response || '…';
+      history.push({ role: 'user', content: text });
+      history.push({ role: 'assistant', content: reply });
+      while (history.length > HISTORY_LIMIT) history.shift();
+
+      showTurn(turnHermes, reply);
+      speak(reply);
+    } catch (e) {
+      if (e.name === 'AbortError') return;         // user cancelled; state already reset
+      fail(e.message);
+    } finally {
+      inflight = null;
+    }
+  }
+
+  function cancelRequest(){
+    if (inflight) inflight.abort();
+    inflight = null;
     setState('idle');
   }
-}
 
-function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-  isRecording = false;
-  if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
-}
-
-// ── Events ──
-ORACLE.addEventListener('mousedown', e => { e.preventDefault(); if (!isRecording) startRecording(); });
-ORACLE.addEventListener('mouseup', () => { if (isRecording) stopRecording(); });
-ORACLE.addEventListener('mouseleave', () => { if (isRecording) stopRecording(); });
-ORACLE.addEventListener('touchstart', e => { e.preventDefault(); if (!isRecording) startRecording(); }, { passive: false });
-ORACLE.addEventListener('touchend', e => { e.preventDefault(); if (isRecording) stopRecording(); }, { passive: false });
-
-SEND.addEventListener('click', () => sendToHermes(INPUT.value));
-INPUT.addEventListener('keydown', e => { if (e.key === 'Enter') sendToHermes(INPUT.value); });
-
-document.addEventListener('keydown', e => {
-  if (e.key === ' ' && !e.repeat && !isRecording && document.activeElement !== INPUT) {
-    e.preventDefault(); startRecording();
+  function fail(message){
+    showTurn(turnHermes, message, true);
+    setState('idle');
   }
-});
-document.addEventListener('keyup', e => {
-  if (e.key === ' ' && isRecording) { e.preventDefault(); stopRecording(); }
-});
 
-console.log('✨ Hermes Voice ready');
+  /* ── speech synthesis ───────────────────────────────────────────── */
+  const synth = window.speechSynthesis;
+  let ttsPrimed = false;
+  let keepAlive = null;
+
+  // Safari and Chrome want the first utterance to originate from a gesture.
+  function primeTTS(){
+    if (ttsPrimed || !synth) return;
+    ttsPrimed = true;
+    try {
+      const u = new SpeechSynthesisUtterance('');
+      u.volume = 0;
+      synth.speak(u);
+    } catch(_){}
+  }
+
+  function pickVoice(){
+    const voices = synth.getVoices() || [];
+    const lang = (navigator.language || 'en-US').slice(0, 2);
+    return voices.find(v => v.lang.startsWith(lang) && /natural|neural|enhanced|premium/i.test(v.name))
+        || voices.find(v => v.lang.startsWith(lang) && v.localService)
+        || voices.find(v => v.lang.startsWith(lang))
+        || null;
+  }
+
+  function speak(text){
+    if (!synth){ setState('idle'); return; }
+    synth.cancel();
+    setState('speaking');
+
+    const u = new SpeechSynthesisUtterance(text);
+    const v = pickVoice();
+    if (v) u.voice = v;
+    u.rate = 1.02;
+    u.pitch = 1;
+    const done = () => { clearInterval(keepAlive); setState('idle'); };
+    u.onend = done;
+    u.onerror = done;
+    synth.speak(u);
+
+    // Chrome silently pauses long utterances; nudge it while we're speaking.
+    clearInterval(keepAlive);
+    keepAlive = setInterval(() => {
+      if (!synth.speaking){ clearInterval(keepAlive); return; }
+      synth.pause(); synth.resume();
+    }, 9000);
+  }
+
+  function stopSpeaking(){
+    clearInterval(keepAlive);
+    if (synth) synth.cancel();
+    setState('idle');
+  }
+
+  /* ── typed fallback (no SpeechRecognition, or by choice) ─────────── */
+  function openComposer(){
+    composer.classList.add('on');
+    composerInput.focus();
+    if (!SR) hint.textContent = 'Speech input unavailable — type instead';
+  }
+  function closeComposer(){
+    composer.classList.remove('on');
+    composerInput.blur();
+  }
+
+  composer.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = composerInput.value.trim();
+    if (!text) return;
+    composerInput.value = '';
+    primeTTS();
+    send(text);
+  });
+
+  /* ------------------------------------------------------------------ */
+  /*  Interaction — tap anywhere to advance the conversation             */
+  /* ------------------------------------------------------------------ */
+  function handleTap(e){
+    if (e) e.preventDefault();
+    primeTTS();
+    if (composer.classList.contains('on')) closeComposer();
+
+    if (state === 'idle')           beginListening();
+    else if (state === 'listening') finishListening();
+    else if (state === 'thinking')  cancelRequest();
+    else                            stopSpeaking();
+  }
+
+  canvas.addEventListener('pointerdown', handleTap);
+  hint.addEventListener('click', (e) => {
+    e.stopPropagation();
+    primeTTS();
+    composer.classList.contains('on') ? closeComposer() : openComposer();
+  });
+
+  window.addEventListener('keydown', e => {
+    if (document.activeElement === composerInput){
+      if (e.key === 'Escape') closeComposer();
+      return;
+    }
+    if (e.code === 'Space' && !e.repeat) handleTap(e);
+    if (e.key === 't' || e.key === 'T') { primeTTS(); openComposer(); }
+  });
+
+  /* ------------------------------------------------------------------ */
+  /*  Public API — drive the visual from outside if you want to          */
+  /*                                                                     */
+  /*    HexVoice.setState('idle' | 'listening' | 'thinking' | 'speaking') */
+  /*    HexVoice.setLevel(0..1 | null)   pass real amplitude, null = auto */
+  /*    HexVoice.send('text')            skip the mic, ask directly       */
+  /* ------------------------------------------------------------------ */
+  window.HexVoice = {
+    setState,
+    setLevel(v){ externalLevel = (v === null || v === undefined) ? null : Math.max(0, Math.min(1, v)); },
+    send,
+    get state(){ return state; },
+    get history(){ return history.slice(); }
+  };
+
+  if (synth && synth.onvoiceschanged !== undefined){
+    synth.onvoiceschanged = () => {};   // populate the voice list on first fire
+  }
+  if (!SR) hint.textContent = 'Tap to type — speech input unavailable';
+
+  window.addEventListener('resize', resize);
+  resize();
+  loop();
+})();
 </script>
 </body>
 </html>
