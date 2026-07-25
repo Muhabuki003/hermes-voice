@@ -8,8 +8,9 @@ export async function onRequest(context) {
   }
   try {
     const body = await request.text();
-    const resp = await fetch("https://office.bookistudios.com/api/hermes/voice", {
+    const resp = await fetch("http://167.233.38.96:9379/api/hermes/voice", {
       method: "POST", headers: { "Content-Type": "application/json" }, body,
+      signal: AbortSignal.timeout(60000)
     });
     const data = await resp.json();
     return new Response(JSON.stringify(data), { headers: { ...h, "Content-Type": "application/json" } });
