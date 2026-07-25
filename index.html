@@ -72,6 +72,7 @@
     font-size:13px;
     line-height:1.65;
     letter-spacing:.02em;
+    white-space:pre-line;
     opacity:0;
     transform:translateY(6px);
     transition:opacity .4s ease, transform .4s ease;
@@ -415,26 +416,35 @@
   /* ------------------------------------------------------------------ */
   /*  Audio                                                              */
   /* ------------------------------------------------------------------ */
-  let analyser = null, micData = null, audioCtx = null;
+  let micAnalyser = null, micData = null, audioCtx = null;
   let simT = 0, externalLevel = null;
 
+  function ensureAudioCtx(){
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!audioCtx) audioCtx = new AC();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
   async function startMic(){
-    if (analyser) return true;
+    if (micAnalyser) return true;
     try{
       const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const src = audioCtx.createMediaStreamSource(stream);
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = .72;
-      src.connect(analyser);
-      micData = new Uint8Array(analyser.frequencyBinCount);
+      const ac = ensureAudioCtx();
+      if (!ac) return false;
+      const src = ac.createMediaStreamSource(stream);
+      micAnalyser = ac.createAnalyser();
+      micAnalyser.fftSize = 512;
+      micAnalyser.smoothingTimeConstant = .72;
+      src.connect(micAnalyser);
+      micData = new Uint8Array(micAnalyser.frequencyBinCount);
       return true;
     }catch(e){ return false; }
   }
 
   function micLevel(){
-    analyser.getByteFrequencyData(micData);
+    micAnalyser.getByteFrequencyData(micData);
     let sum = 0;
     for (let i = 0; i < micData.length; i++) sum += micData[i] * micData[i];
     return Math.min(1, Math.sqrt(sum / micData.length) / 255 * 3.2);
@@ -461,7 +471,7 @@
   function pollLevel(){
     let v;
     if (externalLevel !== null)     v = externalLevel;
-    else if (state === 'listening') v = analyser ? micLevel() : simBreath();
+    else if (state === 'listening') v = micAnalyser ? micLevel() : simBreath();
     else if (state === 'thinking')  v = simThink();
     else if (state === 'speaking')  v = simSpeech();
     else                             v = .05 + .04 * Math.sin(tick * .03);
@@ -620,8 +630,11 @@
   let inflight = null;
 
   async function send(text){
+    // A new question interrupts whatever is still being said.
     clearInterval(keepAlive);
-    if (synth) synth.cancel();          // a new question interrupts the old answer
+    if (synth) synth.cancel();
+    player.pause();
+    releasePending();
     showTurn(turnYou, text);
     showTurn(turnHermes, '');
     setState('thinking');
@@ -663,57 +676,152 @@
     setState('idle');
   }
 
-  /* ── speech synthesis ───────────────────────────────────────────── */
-  const synth = window.speechSynthesis;
-  let ttsPrimed = false;
-  let keepAlive = null;
+  /* ── voice out ──────────────────────────────────────────────────── */
+  /*  Server-rendered audio is the primary path — browser speechSynthesis
+      is silent on many mobile browsers and its voices vary per device.
+      speechSynthesis stays as a last resort, biased toward en-GB.        */
 
-  // Safari and Chrome want the first utterance to originate from a gesture.
-  function primeTTS(){
-    if (ttsPrimed || !synth) return;
-    ttsPrimed = true;
+  const SPEAK_API = '/api/hermes/speak';
+  // 0-sample WAV: lets us satisfy the "play must start in a gesture" rule
+  // before we have any audio to play.
+  const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+
+  const player = new Audio();
+  player.preload = 'auto';
+  let audioUnlocked = false;
+  let pendingUrl = null;      // set when playback was blocked; a tap retries
+
+  // iOS and Safari only allow playback on an element that was started from a
+  // user gesture. Do that on the first tap, then reuse this element forever.
+  function unlockAudio(){
+    ensureAudioCtx();
+    if (audioUnlocked) return;
     try {
-      const u = new SpeechSynthesisUtterance('');
-      u.volume = 0;
-      synth.speak(u);
+      player.src = SILENT_WAV;
+      const p = player.play();
+      if (p && p.then) p.then(() => { audioUnlocked = true; }).catch(() => {});
+      else audioUnlocked = true;
     } catch(_){}
   }
 
-  function pickVoice(){
-    const voices = synth.getVoices() || [];
-    const lang = (navigator.language || 'en-US').slice(0, 2);
-    return voices.find(v => v.lang.startsWith(lang) && /natural|neural|enhanced|premium/i.test(v.name))
-        || voices.find(v => v.lang.startsWith(lang) && v.localService)
-        || voices.find(v => v.lang.startsWith(lang))
+  function releasePending(){
+    if (pendingUrl){ URL.revokeObjectURL(pendingUrl); pendingUrl = null; }
+  }
+
+  async function speak(text){
+    setState('speaking');
+    try {
+      const r = await fetch(SPEAK_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (r.status === 501) return speakWithBrowser(text);      // no provider configured
+      if (!r.ok){
+        let msg = 'Voice failed (' + r.status + ')';
+        try { msg = (await r.json()).error || msg; } catch(_){}
+        throw new Error(msg);
+      }
+      await playBlob(await r.blob(), text);
+    } catch (e) {
+      // Network or provider trouble — say it out loud however we still can.
+      speakWithBrowser(text, e.message);
+    }
+  }
+
+  function playBlob(blob, text){
+    return new Promise((resolve) => {
+      releasePending();
+      const url = URL.createObjectURL(blob);
+      let settled = false;
+      const finish = (revoke) => {
+        if (settled) return;
+        settled = true;
+        if (revoke){ URL.revokeObjectURL(url); if (pendingUrl === url) pendingUrl = null; }
+        resolve();
+      };
+
+      player.onended = () => { finish(true); setState('idle'); };
+      player.onerror = () => { finish(true); speakWithBrowser(text, 'Audio decode failed'); };
+
+      ensureAudioCtx();
+      player.src = url;
+      const p = player.play();
+      if (p && p.catch){
+        p.catch(() => {
+          // Autoplay was refused — keep the clip and let a tap start it.
+          pendingUrl = url;
+          hint.textContent = 'Tap to hear the reply';
+          finish(false);
+        });
+      }
+    });
+  }
+
+  function retryPending(){
+    if (!pendingUrl) return false;
+    ensureAudioCtx();
+    audioUnlocked = true;
+    player.src = pendingUrl;
+    const p = player.play();
+    if (p && p.catch) p.catch(() => {});
+    hint.textContent = COPY.speaking[1];
+    return true;
+  }
+
+  /* ── last-resort browser speech ─────────────────────────────────── */
+  const synth = window.speechSynthesis;
+  let keepAlive = null;
+
+  function britishVoice(){
+    const voices = (synth && synth.getVoices()) || [];
+    if (!voices.length) return null;
+    const named = (re) => voices.find(v => re.test(v.name) && /^en(-|_)?GB/i.test(v.lang));
+    return named(/daniel|arthur|oliver|george|malcolm|jamie/i)   // common en-GB males
+        || voices.find(v => /^en(-|_)?GB/i.test(v.lang))
+        || voices.find(v => /^en/i.test(v.lang))
         || null;
   }
 
-  function speak(text){
+  function speakWithBrowser(text, note){
+    if (note) showTurn(turnHermes, turnHermes.textContent + '\n(' + note + ')');
     if (!synth){ setState('idle'); return; }
-    synth.cancel();
-    setState('speaking');
 
-    const u = new SpeechSynthesisUtterance(text);
-    const v = pickVoice();
-    if (v) u.voice = v;
-    u.rate = 1.02;
-    u.pitch = 1;
-    const done = () => { clearInterval(keepAlive); setState('idle'); };
-    u.onend = done;
-    u.onerror = done;
-    synth.speak(u);
+    const go = () => {
+      synth.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const v = britishVoice();
+      if (v) u.voice = v;
+      u.lang = (v && v.lang) || 'en-GB';
+      u.rate = 1.0;
+      u.pitch = .95;
+      const done = () => { clearInterval(keepAlive); setState('idle'); };
+      u.onend = done;
+      u.onerror = done;
+      synth.speak(u);
 
-    // Chrome silently pauses long utterances; nudge it while we're speaking.
-    clearInterval(keepAlive);
-    keepAlive = setInterval(() => {
-      if (!synth.speaking){ clearInterval(keepAlive); return; }
-      synth.pause(); synth.resume();
-    }, 9000);
+      // Chrome silently pauses long utterances; nudge it while speaking.
+      clearInterval(keepAlive);
+      keepAlive = setInterval(() => {
+        if (!synth.speaking){ clearInterval(keepAlive); return; }
+        synth.pause(); synth.resume();
+      }, 9000);
+    };
+
+    // The voice list is populated asynchronously on first use.
+    if (!synth.getVoices().length){
+      let fired = false;
+      const once = () => { if (fired) return; fired = true; go(); };
+      synth.addEventListener('voiceschanged', once, { once: true });
+      setTimeout(once, 700);
+    } else go();
   }
 
   function stopSpeaking(){
     clearInterval(keepAlive);
     if (synth) synth.cancel();
+    player.pause();
+    releasePending();
     setState('idle');
   }
 
@@ -733,7 +841,7 @@
     const text = composerInput.value.trim();
     if (!text) return;
     composerInput.value = '';
-    primeTTS();
+    unlockAudio();
     send(text);
   });
 
@@ -742,19 +850,20 @@
   /* ------------------------------------------------------------------ */
   function handleTap(e){
     if (e) e.preventDefault();
-    primeTTS();
+    unlockAudio();
     if (composer.classList.contains('on')) closeComposer();
 
     if (state === 'idle')           beginListening();
     else if (state === 'listening') finishListening();
     else if (state === 'thinking')  cancelRequest();
+    else if (retryPending())        return;   // playback was blocked; start it
     else                            stopSpeaking();
   }
 
   canvas.addEventListener('pointerdown', handleTap);
   hint.addEventListener('click', (e) => {
     e.stopPropagation();
-    primeTTS();
+    unlockAudio();
     composer.classList.contains('on') ? closeComposer() : openComposer();
   });
 
@@ -764,7 +873,7 @@
       return;
     }
     if (e.code === 'Space' && !e.repeat) handleTap(e);
-    if (e.key === 't' || e.key === 'T') { primeTTS(); openComposer(); }
+    if (e.key === 't' || e.key === 'T') { unlockAudio(); openComposer(); }
   });
 
   /* ------------------------------------------------------------------ */
