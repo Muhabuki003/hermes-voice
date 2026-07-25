@@ -689,7 +689,7 @@
       while (history.length > HISTORY_LIMIT) history.shift();
 
       showTurn(turnHermes, reply);
-      speak(reply);
+      speak(reply, data.audio_url);
     } catch (e) {
       if (e.name === 'AbortError') return;         // user cancelled; state already reset
       fail(e.message);
@@ -940,4 +940,5 @@
 })();
 </script>
 </body>
+<!-- force deploy -->
 </html>
