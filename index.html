@@ -667,6 +667,7 @@
   const synth = window.speechSynthesis;
   let ttsPrimed = false;
   let keepAlive = null;
+  let cachedVoices = [];
 
   // Safari and Chrome want the first utterance to originate from a gesture.
   function primeTTS(){
@@ -679,12 +680,18 @@
     } catch(_){}
   }
 
+  function refreshVoices(){
+    if (synth) cachedVoices = synth.getVoices() || [];
+  }
+
   function pickVoice(){
-    const voices = synth.getVoices() || [];
-    const lang = (navigator.language || 'en-US').slice(0, 2);
-    return voices.find(v => v.lang.startsWith(lang) && /natural|neural|enhanced|premium/i.test(v.name))
-        || voices.find(v => v.lang.startsWith(lang) && v.localService)
-        || voices.find(v => v.lang.startsWith(lang))
+    const voices = cachedVoices.length ? cachedVoices : (synth.getVoices() || []);
+    return voices.find(v => v.lang.startsWith('en-GB') && /natural|neural|enhanced|premium/i.test(v.name))
+        || voices.find(v => v.lang.startsWith('en-GB') && v.localService)
+        || voices.find(v => v.lang.startsWith('en-GB'))
+        || voices.find(v => v.lang.startsWith('en') && /natural|neural|enhanced|premium/i.test(v.name))
+        || voices.find(v => v.lang.startsWith('en') && v.localService)
+        || voices.find(v => v.lang.startsWith('en'))
         || null;
   }
 
@@ -703,7 +710,7 @@
     const u = new SpeechSynthesisUtterance(text);
     const v = pickVoice();
     if (v) u.voice = v;
-    u.rate = 1.02;
+    u.rate = 0.95;
     u.pitch = 1;
     const done = () => { clearInterval(keepAlive); setState('idle'); };
     u.onend = done;
@@ -788,8 +795,9 @@
     get history(){ return history.slice(); }
   };
 
-  if (synth && synth.onvoiceschanged !== undefined){
-    synth.onvoiceschanged = () => {};   // populate the voice list on first fire
+  if (synth){
+    refreshVoices();
+    if (synth.onvoiceschanged !== undefined) synth.onvoiceschanged = refreshVoices;
   }
   if (!SR) hint.textContent = 'Tap to type — speech input unavailable';
 
