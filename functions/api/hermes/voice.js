@@ -8,14 +8,15 @@ export async function onRequest(context) {
   }
   try {
     const body = await request.text();
-    const resp = await fetch("http://167.233.38.96:9379/api/hermes/voice", {
+    const resp = await fetch("https://rpm-democrat-adapter-foto.trycloudflare.com/api/hermes/voice", {
       method: "POST", headers: { "Content-Type": "application/json" }, body,
-      signal: AbortSignal.timeout(60000)
+      signal: AbortSignal.timeout(90000)
     });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
     return new Response(JSON.stringify(data), { headers: { ...h, "Content-Type": "application/json" } });
   } catch (e) {
-    return new Response(JSON.stringify({ response: "Hermes is offline. Try again in a moment." }), {
+    return new Response(JSON.stringify({ response: "Hermes is offline. Try again." }), {
       headers: { ...h, "Content-Type": "application/json" },
     });
   }
