@@ -529,6 +529,28 @@
     if (next === 'speaking' || next === 'thinking') simT = 0;
   }
 
+  /* ── viewport zoom reset ────────────────────────────────────────── */
+  /*  iOS Safari zooms the viewport when an input is focused. After
+      sending a message we must snap back so the canvas fills the screen
+      and pinch-zoom doesn't accidentally cancel the request.             */
+  function forceViewportReset(){
+    const meta = document.getElementById('viewport-meta');
+    const prev = meta.content;
+    // Lock scale to 1 to force Safari to un-zoom immediately.
+    meta.content = 'width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-content';
+    // Scroll correction must happen in a rAF *after* the meta change.
+    requestAnimationFrame(() => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      requestAnimationFrame(() => {
+        window.scrollTo(0, 0);
+      });
+    });
+    // Restore zoomable viewport after the repaint settles.
+    setTimeout(() => { meta.content = prev; }, 500);
+  }
+
   /* ------------------------------------------------------------------ */
   /*  Loop                                                               */
   /* ------------------------------------------------------------------ */
@@ -668,6 +690,9 @@
     if (synth) synth.cancel();
     player.pause();
     releasePending();
+    // Snap viewport back in case the user was zoomed in (from input focus
+    // or otherwise) — keeps the canvas full-screen during thinking.
+    forceViewportReset();
     if (attempt === 0) {
       showTurn(turnYou, text);
       showTurn(turnHermes, '');
@@ -915,20 +940,10 @@
     const text = composerInput.value.trim();
     if (!text) return;
     composerInput.value = '';
+    // Snap viewport back from input-focus zoom BEFORE dismissing keyboard.
+    // iOS Safari zooms in when focusing inputs; this forces it back to 1:1.
+    forceViewportReset();
     composerInput.blur();        // dismiss keyboard
-    // Force iOS Safari to snap back from input zoom after keyboard dismiss
-    // Aggressive approach: temporarily lock scale to 1, then restore.
-    const meta = document.getElementById('viewport-meta');
-    const prev = meta.content;
-    meta.content = 'width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,interactive-widget=resizes-content';
-    setTimeout(() => {
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      if (window.visualViewport) {
-        window.scrollTo(0, 0);
-      }
-    }, 150);
-    setTimeout(() => { meta.content = prev; }, 400);
     unlockAudio();
     send(text);
   });
@@ -940,13 +955,20 @@
   // Track active pointers in capture phase so handleTap can reject
   // multi-touch (pinch-to-zoom) before the first finger cancels thinking.
   let activePointers = 0;
-  document.addEventListener('pointerdown', () => { activePointers++; }, true);
+  let multiTouchAt = 0;        // timestamp of last multi-touch event
+  document.addEventListener('pointerdown', () => {
+    activePointers++;
+    if (activePointers > 1) multiTouchAt = Date.now();
+  }, true);
   document.addEventListener('pointerup',   () => { activePointers = Math.max(0, activePointers - 1); });
   document.addEventListener('pointercancel', () => { activePointers = Math.max(0, activePointers - 1); });
 
   function handleTap(e){
     if (e) e.preventDefault();
-    // Ignore multi-touch (pinch-zoom, two-finger scroll, etc.)
+    // Ignore taps within 350ms of a multi-touch (pinch-zoom) — prevents
+    // the synthetic click that fires after pinch-zoom from canceling thinking.
+    if (Date.now() - multiTouchAt < 350) return;
+    // Also ignore if multiple pointers are still active
     if (activePointers > 1) return;
     if (composer.classList.contains('on')) closeComposer();
 
