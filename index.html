@@ -915,7 +915,12 @@
     const text = composerInput.value.trim();
     if (!text) return;
     composerInput.value = '';
-    composerInput.blur();        // dismiss keyboard so iOS snaps back from zoom
+    composerInput.blur();        // dismiss keyboard
+    // Force iOS Safari to snap back from input zoom after keyboard dismiss
+    setTimeout(() => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+    }, 120);
     unlockAudio();
     send(text);
   });
@@ -923,10 +928,18 @@
   /* ------------------------------------------------------------------ */
   /*  Interaction — tap anywhere to advance the conversation             */
   /* ------------------------------------------------------------------ */
+
+  // Track active pointers in capture phase so handleTap can reject
+  // multi-touch (pinch-to-zoom) before the first finger cancels thinking.
+  let activePointers = 0;
+  document.addEventListener('pointerdown', () => { activePointers++; }, true);
+  document.addEventListener('pointerup',   () => { activePointers = Math.max(0, activePointers - 1); });
+  document.addEventListener('pointercancel', () => { activePointers = Math.max(0, activePointers - 1); });
+
   function handleTap(e){
     if (e) e.preventDefault();
-    // Ignore multi-touch (pinch-zoom, etc.) — don't cancel thinking
-    if (e && e.pointerType === 'touch' && (e.isPrimary === false)) return;
+    // Ignore multi-touch (pinch-zoom, two-finger scroll, etc.)
+    if (activePointers > 1) return;
     if (composer.classList.contains('on')) closeComposer();
 
     // Deliberately no unlockAudio() on the idle -> listening tap: starting
