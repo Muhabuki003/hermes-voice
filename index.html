@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content" id="viewport-meta">
 <title>Hex Voice</title>
 <style>
   :root{
@@ -917,10 +917,18 @@
     composerInput.value = '';
     composerInput.blur();        // dismiss keyboard
     // Force iOS Safari to snap back from input zoom after keyboard dismiss
+    // Aggressive approach: temporarily lock scale to 1, then restore.
+    const meta = document.getElementById('viewport-meta');
+    const prev = meta.content;
+    meta.content = 'width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,interactive-widget=resizes-content';
     setTimeout(() => {
       window.scrollTo(0, 0);
       document.documentElement.scrollTop = 0;
-    }, 120);
+      if (window.visualViewport) {
+        window.scrollTo(0, 0);
+      }
+    }, 150);
+    setTimeout(() => { meta.content = prev; }, 400);
     unlockAudio();
     send(text);
   });
@@ -953,7 +961,7 @@
     else                            stopSpeaking();
   }
 
-  canvas.addEventListener('pointerdown', handleTap);
+  canvas.addEventListener('click', handleTap);
   hint.addEventListener('click', (e) => {
     e.stopPropagation();
     unlockAudio();
