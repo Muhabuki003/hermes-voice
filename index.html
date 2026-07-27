@@ -129,9 +129,9 @@
     border-radius:2px;
     color:var(--ink-bright);
     font-family:inherit;
-    font-size:13px;
+    font-size:16px;          /* 16px prevents iOS Safari auto-zoom on focus */
     letter-spacing:.04em;
-    padding:11px 14px;
+    padding:10px 14px;
     outline:none;
     -webkit-user-select:text;user-select:text;
   }
@@ -915,6 +915,7 @@
     const text = composerInput.value.trim();
     if (!text) return;
     composerInput.value = '';
+    composerInput.blur();        // dismiss keyboard so iOS snaps back from zoom
     unlockAudio();
     send(text);
   });
@@ -924,6 +925,8 @@
   /* ------------------------------------------------------------------ */
   function handleTap(e){
     if (e) e.preventDefault();
+    // Ignore multi-touch (pinch-zoom, etc.) — don't cancel thinking
+    if (e && e.pointerType === 'touch' && (e.isPrimary === false)) return;
     if (composer.classList.contains('on')) closeComposer();
 
     // Deliberately no unlockAudio() on the idle -> listening tap: starting
