@@ -662,14 +662,16 @@
   /* ── the round trip ─────────────────────────────────────────────── */
   let inflight = null;
 
-  async function send(text){
+  async function send(text, attempt = 0){
     // A new question interrupts whatever is still being said.
     clearInterval(keepAlive);
     if (synth) synth.cancel();
     player.pause();
     releasePending();
-    showTurn(turnYou, text);
-    showTurn(turnHermes, '');
+    if (attempt === 0) {
+      showTurn(turnYou, text);
+      showTurn(turnHermes, '');
+    }
     setState('thinking');
 
     inflight = new AbortController();
@@ -681,6 +683,15 @@
         signal: inflight.signal
       });
       const data = await r.json();
+
+      // "offline" means the tunnel/bridge was unreachable — retry with backoff
+      // (most common during bridge cold-start or tunnel restart)
+      if (data.response === 'offline' && attempt < 3) {
+        const delay = 2000 * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return send(text, attempt + 1);
+      }
+
       if (!r.ok) throw new Error(data.error || ('Request failed (' + r.status + ')'));
 
       const reply = data.response || '…';
@@ -692,6 +703,12 @@
       speak(reply, data.audio_url);
     } catch (e) {
       if (e.name === 'AbortError') return;         // user cancelled; state already reset
+      // Network errors are often transient — retry once
+      if (attempt < 2 && (e.name === 'TypeError' || String(e.message).includes('fetch'))) {
+        const delay = 2000 * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return send(text, attempt + 1);
+      }
       fail(e.message);
     } finally {
       inflight = null;
