@@ -65,21 +65,43 @@
     align-items:center;
     gap:8px;
     max-width:min(620px,86vw);
+    max-height:clamp(120px,25vh,320px);
+    overflow-y:auto;
+    overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:thin;
+    scrollbar-color:rgba(92,122,124,.25) transparent;
     text-align:center;
     margin-bottom:clamp(14px,4vh,32px);
+    pointer-events:auto;
   }
+  .transcript::-webkit-scrollbar{width:3px}
+  .transcript::-webkit-scrollbar-track{background:transparent}
+  .transcript::-webkit-scrollbar-thumb{background:rgba(92,122,124,.25);border-radius:2px}
   .turn{
     font-size:13px;
     line-height:1.65;
     letter-spacing:.02em;
-    white-space:pre-line;
     opacity:0;
     transform:translateY(6px);
     transition:opacity .4s ease, transform .4s ease;
+    width:100%;
+    word-break:break-word;
   }
   .turn.show{opacity:1;transform:translateY(0)}
   .turn.you{color:rgba(215,243,239,.42);font-size:12px;letter-spacing:.06em}
   .turn.hermes{color:var(--ink-bright)}
+
+  /* ── hide-voice-text mode — text layer hidden, only audio ── */
+  body[data-hidetext="true"] .transcript,
+  body[data-hidetext="true"] .hud .label,
+  body[data-hidetext="true"] .hud .hint,
+  body[data-hidetext="true"] .meter{
+    display:none !important;
+  }
+  body[data-hidetext="true"] .hud{
+    justify-content:center;
+  }
   .turn.error{color:#ff6b5a}
 
   .bottom{
@@ -143,7 +165,7 @@
   }
 </style>
 </head>
-<body data-state="idle">
+<body data-state="idle" data-hidetext="false">
 
   <canvas id="c"></canvas>
 
@@ -715,6 +737,16 @@
     el.textContent = text || '';
     el.classList.toggle('error', !!isError);
     el.classList.toggle('show', !!text);
+    // Auto-scroll transcript to show latest text
+    if (text) {
+      const container = el.closest('.transcript');
+      if (container) {
+        // Scroll on next frame so layout is settled
+        requestAnimationFrame(() => {
+          container.scrollTop = container.scrollHeight;
+        });
+      }
+    }
   }
 
   /* ── speech recognition ─────────────────────────────────────────── */
@@ -840,13 +872,30 @@
 
       if (!r.ok) throw new Error(data.error || ('Request failed (' + r.status + ')'));
 
+      // Handle voice control commands — silent, don't push to history
+      if (data.command === 'hide_text') {
+        setHideText(true);
+        setState('idle');
+        inflight = null;
+        return;
+      }
+      if (data.command === 'show_text') {
+        setHideText(false);
+        setState('idle');
+        inflight = null;
+        return;
+      }
+
       const reply = data.response || '…';
       history.push({ role: 'user', content: text });
       history.push({ role: 'assistant', content: reply });
       while (history.length > HISTORY_LIMIT) history.shift();
 
       showTurn(turnHermes, reply);
-      speak(reply, data.audio_url);
+      // If silent, don't speak — command was executed
+      if (!data.silent) {
+        speak(reply, data.audio_url);
+      }
     } catch (e) {
       if (e.name === 'AbortError') return;         // user cancelled; state already reset
       // Network errors are often transient — retry once
@@ -1131,13 +1180,22 @@
     setState,
     setLevel(v){ externalLevel = (v === null || v === undefined) ? null : Math.max(0, Math.min(1, v)); },
     send,
+    setHideText,
     get state(){ return state; },
+    get hidden(){ return document.body.dataset.hidetext === 'true'; },
     get history(){ return history.slice(); }
   };
 
   if (synth && synth.onvoiceschanged !== undefined){
     synth.onvoiceschanged = () => {};   // populate the voice list on first fire
   }
+  /* ── hide / show voice text ────────────────────────────────────── */
+  function setHideText(val){
+    const hidden = val === true || val === 'true';
+    document.body.dataset.hidetext = String(hidden);
+  }
+
+  /* ── speech recognition check ─────────────────────────────────── */
   if (!SR) hint.textContent = 'Tap to type — speech input unavailable';
 
   window.addEventListener('resize', resize);
