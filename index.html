@@ -1004,6 +1004,7 @@
     inCall = false;
     document.body.dataset.incall = 'false';
     clearAutoSend();
+    clearSpeakWatchdog();
     clearTimeout(rearmTimer);   rearmTimer = null;
     clearTimeout(resumeTimer);  resumeTimer = null;
     stopRecognition();
@@ -1113,7 +1114,9 @@
       showTurn(turnHermes, spoken || '…');
       // If silent, don't speak — command was executed
       if (!data.silent) {
-        speak(spoken, data.audio_url);     // playback end reopens the mic in a call
+        // Absolute first: a relative path resolves against the Pages origin,
+        // where /audio/* returns the SPA fallback (HTML) and plays nothing.
+        speak(spoken, data.audio_url_absolute || data.audio_url);
       } else if (inCall) {
         resumeAfterReply();
       }
@@ -1163,12 +1166,32 @@
   let audioUnlocked = false;
   let pendingUrl = null;      // set when playback was blocked; a tap retries
 
+  /*  A reply must never wedge the call. When a clip does not actually play —
+      wrong URL, blocked autoplay, a silent speech-synthesis fallback — 'ended'
+      never fires, so nothing reopens the mic and the user has to tap every
+      single turn. This watchdog hands the line back on its own.             */
+  let speakWatch = null;
+  function armSpeakWatchdog(ms){
+    clearTimeout(speakWatch);
+    speakWatch = setTimeout(() => {
+      speakWatch = null;
+      if (inCall && state === 'speaking') onPlaybackEnd();
+    }, ms);
+  }
+  function clearSpeakWatchdog(){ clearTimeout(speakWatch); speakWatch = null; }
+
   // iOS and Safari only allow playback on an element that was started from a
   // user gesture. Do that on the first tap, then reuse this element forever.
   function unlockAudio(){
     ensureAudioCtx();
     if (audioUnlocked) return;
     try {
+      // Drop any handlers left over from a previous clip: this is a 0-sample
+      // silent WAV, and a stale onended here would fire a phantom
+      // "playback finished" in the middle of a call.
+      player.onended = null;
+      player.onerror = null;
+      player.onplaying = null;
       player.src = SILENT_WAV;
       const p = player.play();
       if (p && p.then) p.then(() => { audioUnlocked = true; }).catch(() => {});
@@ -1185,6 +1208,9 @@
   // endpoint entirely — no second render, no CORS fetch.
   async function speak(text, audioUrl){
     setState('speaking');
+    // Never let a silent reply wedge the call: if this clip doesn't actually
+    // play, hand the line back in a few seconds (see armSpeakWatchdog).
+    armSpeakWatchdog(4000);
 
     if (audioUrl){
       const ok = await playSrc(audioUrl, text, false);
@@ -1231,6 +1257,12 @@
         resolve(ok);
       };
 
+      player.onplaying = () => {
+        // Playback is genuinely running: hold the watchdog off past the end of
+        // the clip, so a long answer is never cut short.
+        const d = (isFinite(player.duration) && player.duration > 0) ? player.duration * 1000 : 20000;
+        if (inCall) armSpeakWatchdog(d + 3000);
+      };
       player.onended = () => { finish(true, true); onPlaybackEnd(); };
       player.onerror = () => {
         // Let the caller decide what to do; only self-report if it was ours.
@@ -1255,6 +1287,7 @@
   // One place decides what happens when the voice stops: in a call the mic
   // reopens by itself, otherwise we settle back to idle.
   function onPlaybackEnd(){
+    clearSpeakWatchdog();
     if (inCall){ setState('listening'); resumeAfterReply(); }
     else setState('idle');
   }
@@ -1320,6 +1353,7 @@
 
   function stopSpeaking(){
     clearInterval(keepAlive);
+    clearSpeakWatchdog();
     if (synth) synth.cancel();
     player.pause();
     releasePending();

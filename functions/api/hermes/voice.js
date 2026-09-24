@@ -48,6 +48,22 @@ function usable(data) {
   return !!data.audio_url;
 }
 
+// The bridge reports audio twice: a relative path (audio_url) and a fully
+// qualified one (audio_url_absolute). A relative path is useless to the page —
+// it resolves against the Pages origin, where /audio/* hits Pages' SPA fallback
+// and comes back as HTML with status 200 ("200 text/html"). An <audio> element
+// cannot decode HTML, so nothing plays and the page never reaches 'ended' —
+// which in call mode also means the mic never re-arms. Always hand the page a
+// URL it can actually fetch.
+function playableAudio(data) {
+  if (!data || typeof data !== 'object') return data;
+  const abs = data.audio_url_absolute;
+  const rel = data.audio_url;
+  if (typeof abs === 'string' && abs && typeof rel === 'string' && rel.startsWith('/'))
+    return { ...data, audio_url: abs, audio_url_relative: rel };
+  return data;
+}
+
 export async function onRequest(c) {
   const r = c.request;
   const u = new URL(r.url);
@@ -68,7 +84,7 @@ export async function onRequest(c) {
         signal: AbortSignal.timeout(75000),
       });
       const data = await upstream.json().catch(() => null);
-      if (upstream.ok && usable(data)) return reply(data);
+      if (upstream.ok && usable(data)) return reply(playableAudio(data));
       problems.push(`${target} -> ${upstream.status} ${JSON.stringify(data).slice(0, 140)}`);
     } catch (e) {
       problems.push(`${target} -> ${(e && e.message) || e}`);
