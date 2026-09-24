@@ -1097,15 +1097,23 @@
         return;
       }
 
-      const reply = data.response || '…';
+      const spoken = (typeof data.response === 'string' ? data.response.trim() : '');
+      // A 200 with nothing usable in it is not an answer — say so instead of
+      // printing a bare "…". That ellipsis hid a proxy pointing at the wrong
+      // origin for hours: replies arrived instantly and were always "…".
+      if (!spoken && !data.audio_url){
+        fail('The voice backend returned nothing for that — check the bridge.');
+        return;
+      }
+
       history.push({ role: 'user', content: text });
-      history.push({ role: 'assistant', content: reply });
+      history.push({ role: 'assistant', content: spoken });
       while (history.length > HISTORY_LIMIT) history.shift();
 
-      showTurn(turnHermes, reply);
+      showTurn(turnHermes, spoken || '…');
       // If silent, don't speak — command was executed
       if (!data.silent) {
-        speak(reply, data.audio_url);      // playback end reopens the mic in a call
+        speak(spoken, data.audio_url);     // playback end reopens the mic in a call
       } else if (inCall) {
         resumeAfterReply();
       }
