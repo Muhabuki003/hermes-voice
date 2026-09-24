@@ -52,7 +52,7 @@ export async function onRequest(c) {
   const r = c.request;
   const u = new URL(r.url);
 
-  if (r.method === 'OPTIONS') return new Response('', { status: 204, headers: CORS });
+  if (r.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   if (u.pathname !== '/api/hermes/voice' || r.method !== 'POST')
     return new Response('HVA', { status: 200, headers: CORS });
 
