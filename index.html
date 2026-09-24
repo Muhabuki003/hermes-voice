@@ -137,6 +137,45 @@
     cursor:pointer;
   }
 
+  /* ── call mode ──────────────────────────────────────────────────────
+     While a call is live the dot sits green, the hint reads as a live
+     line, and an explicit hang-up control appears (tapping the canvas
+     must never drop the call).                                        */
+  .hangup{
+    display:none;
+    pointer-events:auto;
+    cursor:pointer;
+    font-family:inherit;
+    font-size:10.5px;
+    letter-spacing:.24em;
+    text-transform:uppercase;
+    color:#ff9a86;
+    background:rgba(255,107,90,.07);
+    border:1px solid rgba(255,107,90,.42);
+    border-radius:2px;
+    padding:8px 15px;
+    transition:background .2s, border-color .2s, color .2s;
+  }
+  .hangup:hover,.hangup:active{
+    background:rgba(255,107,90,.16);
+    border-color:rgba(255,107,90,.8);
+    color:#ffb3a3;
+  }
+  body[data-incall="true"] .hangup{display:inline-block}
+  body[data-incall="true"] .eyebrow{color:rgba(46,230,208,.9)}
+  body[data-incall="true"] .eyebrow .dot{
+    background:#2ee6d0;
+    box-shadow:0 0 12px #2ee6d0;
+    animation:livePulse 1.8s ease-in-out infinite;
+  }
+  @keyframes livePulse{
+    0%,100%{opacity:1}
+    50%{opacity:.35}
+  }
+  @media (prefers-reduced-motion:reduce){
+    body[data-incall="true"] .eyebrow .dot{animation:none}
+  }
+
   /* ── typed fallback ── */
   .composer{
     display:none;
@@ -182,7 +221,8 @@
       <form class="composer" id="composer" autocomplete="off">
         <input id="composer-input" type="text" placeholder="Type to Hermes…" enterkeyhint="send">
       </form>
-      <p class="hint" id="hint">Tap anywhere to speak</p>
+      <p class="hint" id="hint">Tap anywhere to start a call</p>
+      <button class="hangup" id="hangup" type="button">✕ End call</button>
     </div>
   </div>
 
@@ -650,20 +690,31 @@
   }
 
   const COPY = {
-    idle:      ['Idle',      'Tap anywhere to speak'],
+    idle:      ['Idle',      'Tap anywhere to start a call'],
     listening: ['Listening', 'Tap again to send'],
     thinking:  ['Thinking',  'Tap to cancel'],
     speaking:  ['Speaking',  'Tap to interrupt']
   };
 
+  // While a call is live the same four states read as a live line.
+  const COPY_CALL = {
+    idle:      ['In call',            'Reconnecting…'],
+    listening: ['In call · listening','Just talk — I answer out loud'],
+    thinking:  ['In call · thinking', '✕ End call or hold the screen to hang up'],
+    speaking:  ['In call · answering','Tap to talk over me']
+  };
+
+  function copy(){ return (inCall ? COPY_CALL : COPY)[state] || COPY.idle; }
+
   function setState(next){
-    if (next === state) return;
+    const changed = next !== state;
     state = next;
     document.body.dataset.state = next;
-    label.textContent = COPY[next][0];
+    const c = copy();
+    label.textContent = c[0];
     label.classList.add('show');
-    hint.textContent = COPY[next][1];
-    if (next === 'speaking' || next === 'thinking') simT = 0;
+    hint.textContent = c[1];
+    if (changed && (next === 'speaking' || next === 'thinking')) simT = 0;
   }
 
   /* ── viewport zoom reset ────────────────────────────────────────── */
@@ -756,6 +807,27 @@
   let interimText = '';             // fallback when the engine never finalises
   let wantListening = false;        // true between beginListening and finishListening
 
+  /* ── call mode — the phone-call loop ────────────────────────────────
+     One toggle on, then it behaves like a call: the mic stays armed, a
+     pause ends your sentence, the reply is spoken, and the mic reopens by
+     itself. It only stops when the call is ended.                       */
+  const QS = new URLSearchParams(location.search);
+  const SILENCE_MS = Math.max(400, parseInt(QS.get('silence') || '1200', 10) || 1200);
+  const RESUME_MS  = 260;           // beat after playback before the mic reopens
+
+  let inCall = false;               // a call is live
+  let autoSendTimer = null;         // fires when the talking stops
+  let rearmTimer = null;
+  let resumeTimer = null;
+  let utteranceStartedAt = 0;
+  let lastResultAt = 0;
+  let emptyRestarts = 0;            // consecutive reopens with nothing heard
+  let freshUtterance = false;       // next result starts a new turn
+
+  function clearAutoSend(){
+    if (autoSendTimer){ clearTimeout(autoSendTimer); autoSendTimer = null; }
+  }
+
   function buildRecognition(){
     const r = new SR();
     r.continuous = true;
@@ -773,28 +845,78 @@
       // last interim text and use it if no final ever arrives.
       if (gotFinal) interimText = '';
       if (interim)  interimText = interim;
+      lastResultAt = Date.now();
+      if (!utteranceStartedAt) utteranceStartedAt = Date.now();
+      if (freshUtterance){            // he’s talking again — clear the last turn
+        freshUtterance = false;
+        showTurn(turnHermes, '');
+      }
       showTurn(turnYou, (finalText + interim).trim());
       // Only now open the mic for the meter: the recogniser is demonstrably
       // running, so grabbing a second stream can no longer disturb its start.
       if (!micAnalyser) startMic();
+      // In a call a pause IS the send button — there is nothing else to press.
+      if (inCall) scheduleAutoSend(SILENCE_MS);
     };
 
-    // Engines stop on their own after a pause; keep going until the user sends.
-    r.onend = () => { if (wantListening) { try { r.start(); } catch(_){} } };
+    // Engines stop on their own after a pause. Outside a call we keep the line
+    // open until the user sends; inside a call we reopen it, forever.
+    r.onend = () => {
+      if (!wantListening) return;
+      if (inCall){
+        // Reopen after the engine closes. If it keeps closing with nothing
+        // heard at all, ease off so an unusable mic can’t spin the CPU.
+        const heard = Date.now() - lastResultAt < 2500;
+        emptyRestarts = heard ? 0 : emptyRestarts + 1;
+        wantListening = false;
+        armRecognition(emptyRestarts > 3 ? 1200 : 200);
+        return;
+      }
+      try { r.start(); } catch(_){}
+    };
     r.onerror = (e) => {
-      if (e.error === 'no-speech' || e.error === 'aborted') return;
+      const err = e.error;
+      // Normal mid-call: it heard nothing, or we stopped it ourselves.
+      if (err === 'no-speech' || err === 'aborted') return;
+      if (err === 'not-allowed' || err === 'service-not-allowed'){
+        hangUp('Microphone permission denied.');
+        return;
+      }
+      if (inCall){                    // transient — stay on the line
+        wantListening = false;
+        armRecognition(err === 'network' ? 1500 : 700);
+        return;
+      }
       wantListening = false;
-      fail(e.error === 'not-allowed'
-        ? 'Microphone permission denied.'
-        : 'Speech recognition error: ' + e.error);
+      fail('Speech recognition error: ' + err);
     };
     return r;
+  }
+
+  /* ── arming the mic ─────────────────────────────────────────────── */
+  function armRecognition(delay){
+    if (!inCall) return;
+    clearTimeout(rearmTimer);
+    rearmTimer = setTimeout(() => {
+      rearmTimer = null;
+      if (!inCall || wantListening) return;
+      wantListening = true;
+      recognition = buildRecognition();
+      try { recognition.start(); }
+      catch(_){
+        wantListening = false;
+        if (inCall) armRecognition(500);         // InvalidStateError and friends
+        return;
+      }
+      setState('listening');
+    }, Math.max(0, delay || 0));
   }
 
   async function beginListening(){
     if (!SR){ openComposer(); return; }
     finalText = '';
     interimText = '';
+    utteranceStartedAt = 0;
     showTurn(turnYou, '');
     showTurn(turnHermes, '');
     wantListening = true;
@@ -814,6 +936,90 @@
     }
   }
 
+  /* ── the call loop ──────────────────────────────────────────────── */
+  /*  A turn ends on silence instead of a tap, and every reply, every
+      interruption and every hiccup re-arms the mic by itself — so the
+      only thing that ends the conversation is ending the call.          */
+
+  // Silence, not a tap, is the send button.
+  function scheduleAutoSend(ms){
+    if (!inCall) return;
+    clearAutoSend();
+    autoSendTimer = setTimeout(() => {
+      autoSendTimer = null;
+      if (!inCall || !wantListening) return;
+      commitTurn();
+    }, ms);
+  }
+
+  function commitTurn(){
+    if (!inCall || !wantListening) return;
+    clearAutoSend();
+    const text = (finalText.trim() || interimText.trim());
+    finalText = '';
+    interimText = '';
+    utteranceStartedAt = 0;
+    if (!text){                    // silence with nothing in it — keep the line open
+      armRecognition(250);
+      return;
+    }
+    stopRecognition();
+    setTimeout(stopMic, 250);
+    send(text);                    // playback end re-arms the mic (resumeAfterReply)
+  }
+
+  // Reopen the mic once the reply has actually been heard (or was skipped).
+  function resumeAfterReply(){
+    if (!inCall) return;
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null;
+      if (!inCall) return;
+      freshUtterance = true;
+      armRecognition(0);
+    }, RESUME_MS);
+  }
+
+  function startCall(){
+    if (inCall) return;
+    if (!SR){ openComposer(); return; }
+    inCall = true;
+    emptyRestarts = 0;
+    freshUtterance = true;
+    utteranceStartedAt = 0;
+    document.body.dataset.incall = 'true';
+    finalText = '';
+    interimText = '';
+    clearAutoSend();
+    showTurn(turnYou, '');
+    showTurn(turnHermes, '');
+    setState('listening');
+    // armRecognition, not the immediate start: the tap handler blesses the audio
+    // element first (Safari refuses later playback without a gesture), and the
+    // silent unlock needs a beat to clear before the recogniser takes the mic.
+    armRecognition(150);
+  }
+
+  function endCall(note){
+    inCall = false;
+    document.body.dataset.incall = 'false';
+    clearAutoSend();
+    clearTimeout(rearmTimer);   rearmTimer = null;
+    clearTimeout(resumeTimer);  resumeTimer = null;
+    stopRecognition();
+    stopMic();
+    clearInterval(keepAlive);
+    if (synth) synth.cancel();
+    player.pause();
+    releasePending();
+    if (note) showTurn(turnHermes, note, true);
+    setState('idle');
+    hint.textContent = COPY.idle[1];
+  }
+
+  // Hang up — the only way a call ends. A canvas tap never does it.
+  function hangUp(note){ endCall(note); }
+
   function finishListening(){
     stopRecognition();
     // Give the engine a beat to flush its last final result.
@@ -821,6 +1027,7 @@
       const text = (finalText.trim() || interimText.trim());
       finalText = '';
       interimText = '';
+      utteranceStartedAt = 0;
       stopMic();
       if (text) send(text);
       else missedSpeech();
@@ -829,6 +1036,10 @@
 
   // Never drop into idle without saying why — a silent reset reads as a crash.
   function missedSpeech(){
+    if (inCall){                    // a call does not end because of a miss
+      resumeAfterReply();
+      return;
+    }
     showTurn(turnYou, '');
     showTurn(turnHermes, 'I didn’t catch that — tap and speak again.', true);
     setState('idle');
@@ -875,14 +1086,14 @@
       // Handle voice control commands — silent, don't push to history
       if (data.command === 'hide_text') {
         setHideText(true);
-        setState('idle');
         inflight = null;
+        if (inCall) resumeAfterReply(); else setState('idle');
         return;
       }
       if (data.command === 'show_text') {
         setHideText(false);
-        setState('idle');
         inflight = null;
+        if (inCall) resumeAfterReply(); else setState('idle');
         return;
       }
 
@@ -894,7 +1105,9 @@
       showTurn(turnHermes, reply);
       // If silent, don't speak — command was executed
       if (!data.silent) {
-        speak(reply, data.audio_url);
+        speak(reply, data.audio_url);      // playback end reopens the mic in a call
+      } else if (inCall) {
+        resumeAfterReply();
       }
     } catch (e) {
       if (e.name === 'AbortError') return;         // user cancelled; state already reset
@@ -913,13 +1126,17 @@
   function cancelRequest(){
     if (inflight) inflight.abort();
     inflight = null;
-    setState('idle');
+    // Staying on the line: dropping a question must not drop the call.
+    if (inCall) resumeAfterReply(); else setState('idle');
   }
 
   function fail(message){
+    showTurn(turnHermes, message, true);
+    // A dropped request shouldn't drop the call — say what happened and keep
+    // the line open so he can simply say it again.
+    if (inCall){ resumeAfterReply(); return; }
     stopRecognition();
     stopMic();
-    showTurn(turnHermes, message, true);
     setState('idle');
   }
 
@@ -1006,7 +1223,7 @@
         resolve(ok);
       };
 
-      player.onended = () => { finish(true, true); setState('idle'); };
+      player.onended = () => { finish(true, true); onPlaybackEnd(); };
       player.onerror = () => {
         // Let the caller decide what to do; only self-report if it was ours.
         if (isObjectUrl){ finish(true, true); speakWithBrowser(text, 'Audio decode failed'); }
@@ -1025,6 +1242,13 @@
         });
       }
     });
+  }
+
+  // One place decides what happens when the voice stops: in a call the mic
+  // reopens by itself, otherwise we settle back to idle.
+  function onPlaybackEnd(){
+    if (inCall){ setState('listening'); resumeAfterReply(); }
+    else setState('idle');
   }
 
   function retryPending(){
@@ -1064,7 +1288,7 @@
       u.lang = (v && v.lang) || 'en-GB';
       u.rate = 1.0;
       u.pitch = .95;
-      const done = () => { clearInterval(keepAlive); setState('idle'); };
+      const done = () => { clearInterval(keepAlive); onPlaybackEnd(); };
       u.onend = done;
       u.onerror = done;
       synth.speak(u);
@@ -1091,7 +1315,9 @@
     if (synth) synth.cancel();
     player.pause();
     releasePending();
-    setState('idle');
+    // Interrupted mid-call: stop talking and hand the line straight back.
+    if (inCall){ setState('listening'); resumeAfterReply(); }
+    else setState('idle');
   }
 
   /* ── typed fallback (no SpeechRecognition, or by choice) ─────────── */
@@ -1142,18 +1368,47 @@
     if (activePointers > 1) return;
     if (composer.classList.contains('on')) closeComposer();
 
-    // Deliberately no unlockAudio() on the idle -> listening tap: starting
+    // Deliberately no unlockAudio() on the idle -> call tap: starting
     // playback right before getUserMedia and recognition.start() takes audio
-    // focus away and stops the recogniser from hearing anything. The send tap
+    // focus away and stops the recogniser from hearing anything. The call tap
     // is a gesture too, and it still lands well before playback is needed.
-    if (state === 'idle')           beginListening();
+    // While a call is live a tap never hangs up — it only interrupts.
+    if (inCall){
+      if (state === 'thinking')      cancelRequest();   // drop the question, stay on the line
+      else if (state === 'speaking') stopSpeaking();    // talk over me and I stop
+      else if (retryPending())       return;            // blocked playback; start it
+      return;                                           // listening / idle: a tap does nothing
+    }
+
+    if (state === 'idle')           { unlockAudio(); startCall(); }
     else if (state === 'listening') { unlockAudio(); finishListening(); }
     else if (state === 'thinking')  cancelRequest();
     else if (retryPending())        return;   // playback was blocked; start it
     else                            stopSpeaking();
   }
 
-  canvas.addEventListener('click', handleTap);
+  // Hold anywhere for 800ms to hang up. A plain tap on a phone screen must
+  // never drop the call, so ending it is deliberate.
+  let holdTimer = null, held = false;
+  canvas.addEventListener('pointerdown', () => {
+    held = false;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => { held = true; if (inCall) hangUp(); }, 800);
+  });
+  canvas.addEventListener('pointerup',     () => clearTimeout(holdTimer));
+  canvas.addEventListener('pointercancel', () => clearTimeout(holdTimer));
+  canvas.addEventListener('pointerleave',  () => clearTimeout(holdTimer));
+
+  canvas.addEventListener('click', (e) => {
+    if (held){ held = false; return; }        // the hold already hung up
+    handleTap(e);
+  });
+
+  document.getElementById('hangup').addEventListener('click', (e) => {
+    e.stopPropagation();
+    hangUp();
+  });
+
   hint.addEventListener('click', (e) => {
     e.stopPropagation();
     unlockAudio();
@@ -1165,8 +1420,19 @@
       if (e.key === 'Escape') closeComposer();
       return;
     }
+    if (inCall && (e.key === 'Escape' || e.key === 'x' || e.key === 'X')){ hangUp(); return; }
     if (e.code === 'Space' && !e.repeat) handleTap(e);
     if (e.key === 't' || e.key === 'T') { unlockAudio(); openComposer(); }
+  });
+
+  // Leaving the tab releases the mic (and the browser's mic indicator); coming
+  // back re-arms it. The call itself survives the trip.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden){
+      if (inCall && wantListening){ wantListening = false; stopRecognition(); stopMic(); }
+    } else if (inCall && !wantListening && state !== 'thinking' && state !== 'speaking'){
+      armRecognition(150);
+    }
   });
 
   /* ------------------------------------------------------------------ */
@@ -1181,6 +1447,10 @@
     setLevel(v){ externalLevel = (v === null || v === undefined) ? null : Math.max(0, Math.min(1, v)); },
     send,
     setHideText,
+    call(on){ on ? startCall() : endCall(); },
+    hangUp,
+    get inCall(){ return inCall; },
+    get listening(){ return wantListening; },
     get state(){ return state; },
     get hidden(){ return document.body.dataset.hidetext === 'true'; },
     get history(){ return history.slice(); }
@@ -1197,6 +1467,7 @@
 
   /* ── speech recognition check ─────────────────────────────────── */
   if (!SR) hint.textContent = 'Tap to type — speech input unavailable';
+  else if (!inCall) hint.textContent = COPY.idle[1];
 
   window.addEventListener('resize', resize);
   resize();
